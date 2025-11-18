@@ -110,3 +110,4 @@ const SupabaseExample = () => {
 export default SupabaseExample;
 
 
+

@@ -143,3 +143,4 @@ INSERT INTO public.training_sessions (trainer_id, session_date, start_time, end_
 Your fitness app database will be ready! 💪
 
 
+

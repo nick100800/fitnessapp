@@ -133,3 +133,4 @@ Run the sample data SQL from `DATABASE_SETUP.md` to populate trainers and sessio
 Your fitness app is now ready to help clients book training sessions! 🎉💪
 
 
+

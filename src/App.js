@@ -11,66 +11,138 @@ function App() {
   useEffect(() => {
     // Check if user is logged in
     const checkUser = async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      setUser(user);
+      try {
+        const {
+          data: { user },
+          error: userError,
+        } = await supabase.auth.getUser();
+        
+        if (userError) {
+          console.error("Error getting user:", userError);
+          setUser(null);
+          setUserRole(null);
+          setLoading(false);
+          return;
+        }
 
-      // Check if user is a trainer
-      if (user) {
-        const { data: trainer } = await supabase
-          .from("trainers")
-          .select("*")
-          .eq("user_id", user.id)
-          .single();
+        setUser(user);
 
-        setUserRole(trainer ? "trainer" : "client");
+        // Check if user is a trainer
+        if (user) {
+          try {
+            const { data: trainer, error: trainerError } = await supabase
+              .from("trainers")
+              .select("*")
+              .eq("user_id", user.id)
+              .single();
+
+            // If error is "PGRST116" (no rows returned), user is not a trainer - this is OK
+            if (trainerError && trainerError.code !== "PGRST116") {
+              console.error("Error checking trainer status:", trainerError);
+            }
+
+            setUserRole(trainer ? "trainer" : "client");
+          } catch (err) {
+            console.error("Error in trainer check:", err);
+            // Default to client if trainer check fails
+            setUserRole("client");
+          }
+        }
+
+        setLoading(false);
+      } catch (error) {
+        console.error("Unexpected error in checkUser:", error);
+        setUser(null);
+        setUserRole(null);
+        setLoading(false);
       }
-
-      setLoading(false);
     };
 
-    checkUser();
+    // Add timeout to prevent infinite loading
+    let isCompleted = false;
+    const timeoutId = setTimeout(() => {
+      if (!isCompleted) {
+        console.warn("User check timed out, setting loading to false");
+        setLoading(false);
+      }
+    }, 10000); // 10 second timeout
+
+    checkUser().finally(() => {
+      isCompleted = true;
+      clearTimeout(timeoutId);
+    });
 
     // Listen for auth changes
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (event, session) => {
-      setUser(session?.user ?? null);
+      try {
+        setUser(session?.user ?? null);
 
-      if (session?.user) {
-        // Check if user is a trainer
-        const { data: trainer } = await supabase
-          .from("trainers")
-          .select("*")
-          .eq("user_id", session.user.id)
-          .single();
+        if (session?.user) {
+          try {
+            // Check if user is a trainer
+            const { data: trainer, error: trainerError } = await supabase
+              .from("trainers")
+              .select("*")
+              .eq("user_id", session.user.id)
+              .single();
 
-        setUserRole(trainer ? "trainer" : "client");
-      } else {
-        setUserRole(null);
+            // If error is "PGRST116" (no rows returned), user is not a trainer - this is OK
+            if (trainerError && trainerError.code !== "PGRST116") {
+              console.error("Error checking trainer status:", trainerError);
+            }
+
+            setUserRole(trainer ? "trainer" : "client");
+          } catch (err) {
+            console.error("Error in trainer check:", err);
+            setUserRole("client");
+          }
+        } else {
+          setUserRole(null);
+        }
+
+        setLoading(false);
+      } catch (error) {
+        console.error("Error in auth state change:", error);
+        setLoading(false);
       }
-
-      setLoading(false);
     });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      clearTimeout(timeoutId);
+      subscription.unsubscribe();
+    };
   }, []);
 
   const handleSignOut = async () => {
     try {
-      // Attempt normal sign out
-      await supabase.auth.signOut();
-
-      // Forcefully remove any lingering session token
-      localStorage.removeItem("supabase.auth.token");
-
-      // Reset local state
+      // Reset local state first to unblock UI
       setUser(null);
       setUserRole(null);
       setCurrentView("login");
+      setLoading(false);
+
+      // Attempt normal sign out (don't await if it hangs)
+      supabase.auth.signOut().catch((err) => {
+        console.error("Error during sign out:", err);
+      });
+
+      // Forcefully remove any lingering session tokens
+      localStorage.removeItem("supabase.auth.token");
+      // Clear all supabase-related localStorage items
+      Object.keys(localStorage).forEach((key) => {
+        if (key.startsWith("sb-")) {
+          localStorage.removeItem(key);
+        }
+      });
     } catch (error) {
       console.error("Error signing out:", error);
+      // Even if there's an error, reset the UI state
+      setUser(null);
+      setUserRole(null);
+      setCurrentView("login");
+      setLoading(false);
     }
   };
 
@@ -108,12 +180,20 @@ function App() {
                     </button>
                   </>
                 ) : (
-                  <button
-                    className={currentView === "book" ? "active" : ""}
-                    onClick={() => setCurrentView("book")}
-                  >
-                    Book Session
-                  </button>
+                  <>
+                    <button
+                      className={currentView === "book" ? "active" : ""}
+                      onClick={() => setCurrentView("book")}
+                    >
+                      Book Session
+                    </button>
+                    <button
+                      className={currentView === "my-bookings" ? "active" : ""}
+                      onClick={() => setCurrentView("my-bookings")}
+                    >
+                      My Bookings
+                    </button>
+                  </>
                 )}
                 <button
                   className={currentView === "profile" ? "active" : ""}
@@ -152,7 +232,26 @@ function App() {
       </header>
 
       <main className="app-main">
-        {!user ? (
+        {loading ? (
+          <div className="loading">
+            Loading...
+            <br />
+            <button
+              onClick={() => setLoading(false)}
+              style={{
+                marginTop: "1rem",
+                padding: "0.5rem 1rem",
+                background: "#e53e3e",
+                color: "white",
+                border: "none",
+                borderRadius: "4px",
+                cursor: "pointer",
+              }}
+            >
+              Skip Loading
+            </button>
+          </div>
+        ) : !user ? (
           currentView === "login" ? (
             <LoginView onViewChange={setCurrentView} />
           ) : currentView === "trainer-register" ? (
@@ -313,6 +412,8 @@ function AuthenticatedView({ currentView, user, userRole }) {
       return <HomeView user={user} userRole={userRole} />;
     case "book":
       return <BookingView user={user} />;
+    case "my-bookings":
+      return <MyBookingsView user={user} />;
     case "trainer-dashboard":
       return <TrainerDashboardView user={user} />;
     case "create-session":
@@ -351,42 +452,67 @@ function HomeView({ user }) {
 
 // Booking View
 function BookingView({ user }) {
+  console.log("BookingView rendered");
+
   const [sessions, setSessions] = useState([]);
   const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchSessions();
-  }, []);
+  const [error, setError] = useState(null);
 
   const fetchSessions = async () => {
+    console.log("fetchSessions START");
+    setError(null);
+
     try {
-      console.log("Fetching sessions...");
-      const { data, error } = await supabase
+      // Add timeout to prevent infinite loading
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("Request timeout")), 15000)
+      );
+
+      const queryPromise = supabase
         .from("training_sessions")
         .select(
           `
-          *,
-          trainers:trainer_id (
-            name,
-            specialties,
-            hourly_rate
-          )
-        `
+        *,
+        trainers:trainer_id (
+          name,
+          specialties,
+          hourly_rate
+        )
+      `
         )
         .eq("status", "available")
         .order("session_date", { ascending: true });
 
-      console.log("Sessions data:", data);
-      console.log("Sessions error:", error);
+      const { data, error: queryError } = await Promise.race([
+        queryPromise,
+        timeoutPromise,
+      ]);
 
-      if (error) throw error;
+      console.log("data:", data);
+      console.log("error:", queryError);
+
+      if (queryError) throw queryError;
+
       setSessions(data || []);
-    } catch (error) {
-      console.error("Error fetching sessions:", error);
+    } catch (err) {
+      console.error("FETCH ERROR:", err);
+      setError(
+        err.message === "Request timeout"
+          ? "Request timed out. Please try again."
+          : "Failed to load sessions. Please refresh the page."
+      );
+      setSessions([]); // Set empty array on error
     } finally {
+      console.log("fetchSessions END → setLoading(false)");
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    console.log("useEffect fired — calling fetchSessions()");
+    fetchSessions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const bookSession = async (sessionId) => {
     try {
@@ -406,13 +532,62 @@ function BookingView({ user }) {
   };
 
   if (loading) {
-    return <div className="loading">Loading available sessions...</div>;
+    return (
+      <div className="loading">
+        Loading available sessions...
+        <br />
+        <button
+          onClick={() => {
+            setLoading(false);
+            setError("Loading cancelled. Please refresh to try again.");
+          }}
+          style={{
+            marginTop: "1rem",
+            padding: "0.5rem 1rem",
+            background: "#e53e3e",
+            color: "white",
+            border: "none",
+            borderRadius: "4px",
+            cursor: "pointer",
+          }}
+        >
+          Cancel Loading
+        </button>
+      </div>
+    );
   }
 
   return (
     <div className="booking-container">
       <h2>Available Training Sessions</h2>
-      {sessions.length === 0 ? (
+      {error && (
+        <div
+          style={{
+            background: "#fed7d7",
+            color: "#c53030",
+            padding: "1rem",
+            borderRadius: "8px",
+            marginBottom: "1rem",
+          }}
+        >
+          <strong>Error:</strong> {error}
+          <button
+            onClick={fetchSessions}
+            style={{
+              marginLeft: "1rem",
+              padding: "0.5rem 1rem",
+              background: "#667eea",
+              color: "white",
+              border: "none",
+              borderRadius: "4px",
+              cursor: "pointer",
+            }}
+          >
+            Retry
+          </button>
+        </div>
+      )}
+      {sessions.length === 0 && !error ? (
         <p>No available sessions at the moment. Check back later!</p>
       ) : (
         <div className="sessions-grid">
@@ -493,7 +668,8 @@ function TrainerRegisterView({ onViewChange }) {
   const [specialties, setSpecialties] = useState("");
   const [bio, setBio] = useState("");
   const [hourlyRate, setHourlyRate] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  //11/17/2025 changed setLoading] = useState(false) to true
   const [message, setMessage] = useState("");
 
   const handleTrainerRegister = async (e) => {
@@ -850,6 +1026,207 @@ function CreateSessionView({ user }) {
         </button>
       </form>
       {message && <p className="message">{message}</p>}
+    </div>
+  );
+}
+
+// My Bookings View
+function MyBookingsView({ user }) {
+  const [bookings, setBookings] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const fetchBookings = async () => {
+    setError(null);
+    setLoading(true);
+
+    try {
+      // Add timeout to prevent infinite loading
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("Request timeout")), 15000)
+      );
+
+      const queryPromise = supabase
+        .from("bookings")
+        .select(
+          `
+          *,
+          training_sessions:session_id (
+            id,
+            session_date,
+            start_time,
+            end_time,
+            session_type,
+            price,
+            trainers:trainer_id (
+              name,
+              specialties
+            )
+          )
+        `
+        )
+        .eq("client_id", user.id)
+        .order("booking_date", { ascending: false });
+
+      const { data, error: queryError } = await Promise.race([
+        queryPromise,
+        timeoutPromise,
+      ]);
+
+      if (queryError) throw queryError;
+
+      setBookings(data || []);
+    } catch (err) {
+      console.error("FETCH BOOKINGS ERROR:", err);
+      setError(
+        err.message === "Request timeout"
+          ? "Request timed out. Please try again."
+          : "Failed to load bookings. Please refresh the page."
+      );
+      setBookings([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchBookings();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="loading">
+        Loading your bookings...
+        <br />
+        <button
+          onClick={() => {
+            setLoading(false);
+            setError("Loading cancelled. Please refresh to try again.");
+          }}
+          style={{
+            marginTop: "1rem",
+            padding: "0.5rem 1rem",
+            background: "#e53e3e",
+            color: "white",
+            border: "none",
+            borderRadius: "4px",
+            cursor: "pointer",
+          }}
+        >
+          Cancel Loading
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="booking-container">
+      <h2>My Bookings</h2>
+      {error && (
+        <div
+          style={{
+            background: "#fed7d7",
+            color: "#c53030",
+            padding: "1rem",
+            borderRadius: "8px",
+            marginBottom: "1rem",
+          }}
+        >
+          <strong>Error:</strong> {error}
+          <button
+            onClick={fetchBookings}
+            style={{
+              marginLeft: "1rem",
+              padding: "0.5rem 1rem",
+              background: "#667eea",
+              color: "white",
+              border: "none",
+              borderRadius: "4px",
+              cursor: "pointer",
+            }}
+          >
+            Retry
+          </button>
+        </div>
+      )}
+      {bookings.length === 0 && !error ? (
+        <p>You haven't booked any sessions yet.</p>
+      ) : (
+        <div className="sessions-grid">
+          {bookings.map((booking) => {
+            const session = booking.training_sessions;
+            if (!session) return null;
+
+            return (
+              <div key={booking.id} className="session-card">
+                <div className="trainer-header">
+                  <h3 className="trainer-name">
+                    {session.trainers?.name || "Unknown Trainer"}
+                  </h3>
+                  <div className="trainer-specialties">
+                    {session.trainers?.specialties?.map((specialty, index) => (
+                      <span key={index} className="specialty-tag">
+                        {specialty}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="session-details">
+                  <div className="detail-row">
+                    <span className="detail-label">📅 Date:</span>
+                    <span className="detail-value">
+                      {new Date(session.session_date).toLocaleDateString(
+                        "en-US",
+                        {
+                          weekday: "long",
+                          year: "numeric",
+                          month: "long",
+                          day: "numeric",
+                        }
+                      )}
+                    </span>
+                  </div>
+
+                  <div className="detail-row">
+                    <span className="detail-label">🕐 Time:</span>
+                    <span className="detail-value">
+                      {session.start_time} - {session.end_time}
+                    </span>
+                  </div>
+
+                  <div className="detail-row">
+                    <span className="detail-label">💪 Type:</span>
+                    <span className="detail-value">
+                      {session.session_type.charAt(0).toUpperCase() +
+                        session.session_type.slice(1)}{" "}
+                      Training
+                    </span>
+                  </div>
+
+                  <div className="detail-row">
+                    <span className="detail-label">💰 Price:</span>
+                    <span className="detail-value price">${session.price}</span>
+                  </div>
+
+                  <div className="detail-row">
+                    <span className="detail-label">Status:</span>
+                    <span className="detail-value">{booking.status}</span>
+                  </div>
+
+                  <div className="detail-row">
+                    <span className="detail-label">Booked on:</span>
+                    <span className="detail-value">
+                      {new Date(booking.booking_date).toLocaleDateString()}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
