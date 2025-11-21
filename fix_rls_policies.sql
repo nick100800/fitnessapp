@@ -64,12 +64,27 @@ CREATE POLICY "Trainers can view session bookings" ON public.bookings
     )
   );
 
+CREATE POLICY "Trainers can update session bookings" ON public.bookings
+  FOR UPDATE USING (
+    auth.uid() IN (
+      SELECT t.user_id 
+      FROM public.trainers t 
+      JOIN public.training_sessions ts ON t.id = ts.trainer_id 
+      WHERE ts.id = session_id
+    )
+  );
+
 -- 6. Test the policies by checking if they work
 -- This should return true if policies are working
 SELECT 
   'RLS policies updated successfully' as status,
   COUNT(*) as trainer_count
 FROM public.trainers;
+
+
+
+
+
 
 
 
